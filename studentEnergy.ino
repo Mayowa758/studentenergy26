@@ -18,8 +18,11 @@ int speed = 100; // the base speed of the motors
 Servo servo1, servo2;
 int servoPin1 = 7;
 int servoPin2 = 8;
-
 int baseAngle = 90;
+
+// SENSORS
+int turbidity = 9;
+int moisture = 12;
 
 void setup() {
   // Motor Pins Setup
@@ -39,8 +42,11 @@ void setup() {
   servo1.write(baseAngle);
   servo2.write(baseAngle);
 
+
+  // Initialise Serial Monitor
   Serial.begin(115200);
 
+  // Initialise Blutooth
   SerialBT.begin("EnviroBot");
   SerialBT.setPin("1234");
 
@@ -133,6 +139,58 @@ void rotateServo(Servo &servo, int endPos) {
 
 }
 
+/*
+Gets the water turbidity
+*/
+
+void getTurbidity() {
+  int sensorValue = analogRead(turbidity);
+
+  float voltage = sensorValue * (5.0 / 1024.0);
+
+  // Convert voltage to NTU
+  float ntu = -1120.4 * voltage * voltage + 5742.3 * voltage - 4352.9;
+
+  // Prevent negative readings
+  if (ntu < 0) {
+    ntu = 0;
+  }
+
+  // Prints the value in Volts
+  Serial.println("Voltage: %.2fV", voltage);
+  SerialBT.println("Voltage: %.2fV", voltage);
+
+  // Prints the value in NTU
+  Serial.println("Turbidity: %.2f NTU", ntu);
+  SerialBT.println("Turbidity: %.2f NTU", ntu);
+
+}
+
+
+/*
+Gets the soil moisture
+*/
+
+void getSoilMoisture() {
+  int sensorValue = analogRead(moisture);
+
+  // These values need to be tested first
+  int dryValue = 3500;
+  int wetValue = 1200;
+
+  int moisturePercent = map(sensorValue, dryValue, wetValue, 0, 100);
+
+  moisturePercent = constrain(moisturePercent, 0, 100);
+
+  // Prints the raw analogue value
+  Serial.println(".2f%", sensorValue);
+  SerialBT.println(".2f%", sensorValue);
+
+  // Prints the value in perecentage
+  Serial.println(".2f%", moisturePercent);
+  SerialBT.println(".2f%", moisturePercent);
+}
+
 
 void loop() {
   // put your main code here, to run repeatedly:
@@ -158,16 +216,24 @@ void loop() {
       case 'S':
         stopMotors();
         break;
-
+      // RIGHT SERVO
       case 'X': {
         int angle = SerialBT.parseInt();
         rotateServo(servo1, angle);
         break;
       }
-
+      // LEFT SERVO
       case 'Y': {
         int angle = SerialBT.parseInt();
         rotateServo(servo2, angle);
+        break;
+      }
+      case 'T': {
+        getTurbidity();
+        break;
+      }
+      case 'M': {
+        getSoilMoisture();
         break;
       }
     }
