@@ -20,8 +20,8 @@ Servo servo1, servo2;
 int servoPin1 = 16;
 int servoPin2 = 17;
 int baseAngle = 0;
-int moistureServoAngle = 115;
-int turbidityServoAngle = 90;
+int moistureServoAngle = 105;
+int turbidityServoAngle = 60;
 
 // SENSORS
 int moisturePin = 34;
@@ -211,6 +211,8 @@ void getSoilMoisture() {
 
 
 void loop() {
+  // put your main code here, to run repeatedly:
+
   // Commands for Controlling EnviroBot With Bluetooth Device
   if (SerialBT.available()) {
 
