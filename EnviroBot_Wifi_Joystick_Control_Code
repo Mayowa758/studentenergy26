@@ -1,0 +1,415 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ESP32Servo.h>
+#include <LittleFS.h>
+
+// ========== ACCESS POINT ==========
+const char* ssid = "Coolest_Robot";
+const char* password = "12345678";
+
+WebServer server(80);
+
+// ========== MOTOR PINS ==========
+int motor1Pin1 = 25;
+int motor1Pin2 = 26;
+int motor2Pin1 = 21;
+int motor2Pin2 = 22;
+
+int enable1Pin = 27;
+int enable2Pin = 23;
+
+// PWM
+const int freq = 30000;
+const int resolution = 8;
+int speedValue = 200;
+
+// ========== SERVOS ==========
+Servo servo1;
+Servo servo2;
+int servo1Pin = 18;
+int servo2Pin = 19;
+
+// ========== SENSORS ==========
+int soilPin = 34;
+int turbidityPin = 35;
+
+float currentLeft = 0;
+float currentRight = 0;
+
+const int DEADZONE = 20;
+
+// ========== WEB PAGE ==========
+void handleRoot() {
+  const char html[] PROGMEM = R"rawliteral(
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { text-align:center; font-family:Arial; }
+
+.joy {
+  width: 200px;
+  height: 200px;
+  background: #ddd;
+  border-radius: 50%;
+  margin: auto;
+  position: relative;
+}
+
+.stick {
+  width: 60px;
+  height: 60px;
+  background: #4CAF50;
+  border-radius: 50%;
+  position: absolute;
+  top: 70px;
+  left: 70px;
+}
+
+.slider { width: 80%; }
+button { padding: 10px; margin: 5px; font-size: 18px; }
+</style>
+</head>
+
+.joy {
+  touch-action: none;
+}
+
+<body>
+
+<h2>ESP32 Robot Control</h2>
+
+<div class="joy" id="joy">
+  <div class="stick" id="stick"></div>
+</div>
+
+<p>Joystick</p>
+
+<hr>
+
+<p>Servo 1</p>
+<input type="range" min="0" max="180" class="slider"
+oninput="fetch('/servo1?val='+this.value)">
+
+<p>Servo 2</p>
+<input type="range" min="0" max="180" class="slider"
+oninput="fetch('/servo2?val='+this.value)">
+
+<hr>
+
+<button onclick="getSoil()">Read Soil Moisture</button>
+<button onclick="getTurbidity()">Read Turbidity</button>
+
+<p id="sensor"></p>
+
+<hr>
+
+<h3>Sensor Readings</h3>
+
+<p>Soil Moisture: <span id="soilVal">--</span> (<span id="soilPct">--</span>%)</p>
+<p>Turbidity: <span id="turbVal">--</span> (<span id="turbPct">--</span>%)</p>
+
+<script>
+
+
+let joy = document.getElementById("joy");
+let stick = document.getElementById("stick");
+
+let lastSoil = null;
+let lastTurbidity = null;
+
+let centerX = 100;
+let centerY = 100;
+
+let joyX = 0;
+let joyY = 0;
+
+let isDragging = false;
+
+function send(x, y){
+  fetch(`/joystick?x=${x}&y=${y}`);
+}
+
+function resetJoystick(){
+    joyX = 0;
+    joyY = 0;
+
+    stick.style.left = "70px";
+    stick.style.top = "70px";
+}
+
+function applyDeadzone(v){
+    const d = 8;
+    return Math.abs(v) < d ? 0 : v;
+}
+
+function getSoil(){
+  fetch('/soil')
+    .then(res => res.text())
+    .then(val => {
+        lastSoil = parseInt(val);
+
+        document.getElementById("soilVal").innerText = lastSoil;
+
+        // convert to percentage (adjust range for your sensor!)
+        let pct = Math.round((lastSoil / 4095) * 100);
+        document.getElementById("soilPct").innerText = pct;
+    });
+}
+
+function getTurbidity(){
+  fetch('/turbidity')
+    .then(res => res.text())
+    .then(val => {
+        lastTurbidity = parseInt(val);
+
+        document.getElementById("turbVal").innerText = lastTurbidity;
+
+        // turbidity usually inverted (clean water = high reading or low depending sensor)
+        let pct = Math.round((1 - (lastTurbidity / 4095)) * 100);
+        document.getElementById("turbPct").innerText = pct;
+    });
+}
+
+joy.addEventListener("touchmove", function(e){
+  let rect = joy.getBoundingClientRect();
+  let x = e.targetTouches[0].clientX - rect.left - centerX;
+  let y = e.targetTouches[0].clientY - rect.top - centerY;
+
+  const radius = 80;
+
+  let distance = Math.sqrt(x*x + y*y);
+
+  if(distance > radius){
+      x = x / distance * radius;
+      y = y / distance * radius;
+  }
+
+  x = Math.round(x);
+  y = Math.round(y);
+
+  x = applyDeadzone(x);
+  y = applyDeadzone(y);
+
+  joyX = x;
+  joyY = y;
+
+  stick.style.left = (joyX + 70) + "px";
+  stick.style.top  = (joyY + 70) + "px";
+
+  startSending()
+});
+
+joy.addEventListener("touchend", resetJoystick);
+
+joy.addEventListener("touchcancel", resetJoystick);
+
+// desktop fallback
+joy.addEventListener("mousedown", function(e){
+  isDragging = true;
+});
+
+document.addEventListener("mousemove", function(e){
+  if(!isDragging) return;
+
+  let rect = joy.getBoundingClientRect();
+  let x = e.clientX - rect.left - centerX;
+  let y = e.clientY - rect.top - centerY;
+
+  const radius = 80;
+
+  let distance = Math.sqrt(x*x + y*y);
+
+  if(distance > radius){
+    x = x / distance * radius;
+    y = y / distance * radius;
+  }
+
+  x = Math.round(x);
+  y = Math.round(y);
+
+  x = applyDeadzone(x);
+  y = applyDeadzone(y);
+
+  joyX = x;
+  joyY = y;
+
+  stick.style.left = (joyX + 70) + "px";
+  stick.style.top  = (joyY + 70) + "px";
+});
+
+document.addEventListener("mouseup", resetJoystick);
+
+document.addEventListener("mouseleave", resetJoystick);
+
+window.addEventListener("blur", resetJoystick);
+
+setInterval(() => {
+  send(joyX, joyY);
+}, 20);
+
+</script>
+
+</body>
+</html>
+
+)rawliteral";
+
+  server.send(200, "text/html", html);
+}
+
+// ========== MOTOR CONTROL ==========
+void setMotor(int left, int right){
+    digitalWrite(motor1Pin1, left > 0);
+    digitalWrite(motor1Pin2, left < 0);
+    digitalWrite(motor2Pin1, right > 0);
+    digitalWrite(motor2Pin2, right < 0);
+
+    int pwmLeft = abs(left);
+    int pwmRight = abs(right);
+
+    if(pwmLeft > 0 && pwmLeft < 80)
+        pwmLeft = 80;
+
+    if(pwmRight > 0 && pwmRight < 80)
+        pwmRight = 80;
+
+    ledcWrite(enable1Pin,pwmLeft);
+    ledcWrite(enable2Pin,pwmRight);
+}
+
+// ========== JOYSTICK ==========
+void handleJoystick() {
+  int x = server.arg("x").toInt();
+  int y = server.arg("y").toInt();
+
+  x = map(x,-80,80,-255,255);
+  y = map(y,-80,80,-255,255);
+
+  float forward = -y;
+  float turn = x;
+
+  float leftMotor = forward + turn;
+  float rightMotor = forward - turn;
+
+  leftMotor = constrain(leftMotor,-255,255);
+  rightMotor = constrain(rightMotor,-255,255);
+
+  // if(abs(x) < DEADZONE) {
+  //   x = 0;
+  // }
+
+  // if(abs(y) < DEADZONE) {
+  //   y = 0;
+  // }
+
+  // if(x == 0 && y == 0) {
+  //     setMotor(0,0);
+  //     server.send(200);
+  //     return;
+  // }
+
+  currentLeft += (leftMotor - currentLeft)*0.15;
+  currentRight += (rightMotor - currentRight)*0.15;
+
+  currentLeft = constrain(currentLeft, -255, 255);
+  currentRight = constrain(currentRight, -255, 255);
+
+  setMotor(currentLeft,currentRight);
+
+  server.send(200);
+}
+
+// ========== SERVOS ==========
+void handleServo1() {
+  servo1.write(server.arg("val").toInt());
+  server.send(200);
+}
+
+void handleServo2() {
+  servo2.write(server.arg("val").toInt());
+  server.send(200);
+}
+
+void logData(String type, int value) {
+  File file = LittleFS.open("/log.csv", FILE_APPEND);
+
+  if (!file) {
+    Serial.println("Failed to open file");
+    return;
+  }
+
+  String line = type + "," + String(value) + "\n";
+  file.print(line);
+  file.close();
+}
+
+void handleLog() {
+  File file = LittleFS.open("/log.csv", FILE_READ);
+
+  if (!file) {
+    server.send(500, "text/plain", "No log file");
+    return;
+  }
+
+  String data = file.readString();
+  file.close();
+
+  server.send(200, "text/plain", data);
+}
+
+// ========== SENSORS ==========
+void handleSoil() {
+  int val = analogRead(soilPin);
+  logData("soil", val);
+  server.send(200, "text/plain", String(val));
+}
+
+void handleTurbidity() {
+  int val = analogRead(turbidityPin);
+  logData("turbidity", val);
+  server.send(200, "text/plain", String(val));
+}
+
+// ========== SETUP ==========
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(motor1Pin1, OUTPUT);
+  pinMode(motor1Pin2, OUTPUT);
+  pinMode(motor2Pin1, OUTPUT);
+  pinMode(motor2Pin2, OUTPUT);
+
+  ledcAttach(enable1Pin, freq, resolution);
+  ledcAttach(enable2Pin, freq, resolution);
+
+  servo1.attach(servo1Pin);
+  servo2.attach(servo2Pin);
+
+  WiFi.softAP(ssid, password);
+
+  Serial.println(WiFi.softAPIP());
+
+  server.on("/", handleRoot);
+  server.on("/joystick", handleJoystick);
+  server.on("/servo1", handleServo1);
+  server.on("/servo2", handleServo2);
+  server.on("/soil", handleSoil);
+  server.on("/turbidity", handleTurbidity);
+  server.on("/log", handleLog);
+
+  server.begin();
+
+  if (!LittleFS.begin(true)) {
+    Serial.println("LittleFS mount failed");
+    return;
+  }
+  Serial.println("LittleFS ready");
+}
+
+// ========== LOOP ==========
+void loop() {
+  server.handleClient();
+}
